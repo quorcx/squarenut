@@ -41,8 +41,29 @@ class DMPPolicyWithPID:
 
         # TODO: Fit DMPs and generate segment trajectories
         # NOTE: you need a DMP for each segment
-        
-        raise NotImplementedError
+        self.trajectories = list()
+        self.pids = list()
+        self.grasps = list()
+
+        for i, (start, end) in enumerate(segments):
+            seg_traj = ee_pos[start:end]
+            seg_grasp = ee_grasp[start:end].flatten()
+            if i == 0:
+                new_goal = new_obj_pos + offset
+                dmp = DMP(n_dmps = 3, n_bfs = n_bfs, dt = dt)
+                dmp.imitate(seg_traj)
+                traj = dmp.rollout(new_goal=new_goal)
+            else:
+                dmp = DMP(n_dmps = 3, n_bfs = n_bfs, dt = dt)
+                dmp.imitate(seg_traj)
+                traj = dmp.rollout()
+            self.trajectories.append(traj)
+            pid = PID(kp = 5.0, ki = 0.0, kd = 0.1, target = traj[0])
+            self.pids.append(pid)
+            self.grasps.append(seg_grasp)
+
+        self.current_segment = 0
+        self.current_step = 0
         
 
 
@@ -57,7 +78,17 @@ class DMPPolicyWithPID:
             List[Tuple[int,int]]: start and end indices per segment.
         """
         # TODO: implement boundary detection
-        raise NotImplementedError
+        grasp_segments = list()
+        start = 0
+        prev_grasp = grasp_flags[start, 0]
+        end = len(grasp_flags)
+        for i in range(1, end) :
+            if grasp_flags[i, 0] != prev_grasp :
+                grasp_segments.append((start, i))
+                start = i
+                prev_grasp = grasp_flags[start, 0]
+        grasp_segments.append((start, end))
+        return grasp_segments
 
 
 
@@ -74,4 +105,23 @@ class DMPPolicyWithPID:
         # TODO: select current segment and step
         # TODO: compute PID-based delta_pos
         # TODO: assemble action (zero rotation + grasp)
-        raise NotImplementedError
+        traj = self.trajectories[self.current_segment]
+        pid = self.pids[self.current_segment]
+
+        y_des = traj[self.current_step] if self.current_step < len(traj) else traj[-1]
+        
+        pid.target = y_des
+        delta_pos = pid.update(robot_eef_pos, dt = self.dt)
+
+        grasp = -1 if self.current_segment % 2 == 0 else 1
+                
+        self.current_step += 1
+        if (self.current_step >= len(traj) 
+            and self.current_segment < len(self.trajectories) - 1):
+            self.current_segment += 1
+            self.current_step = 0
+        
+        action = np.zeros(7)
+        action[:3] = delta_pos
+        action[-1] = grasp
+        return action
